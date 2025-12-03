@@ -4,6 +4,32 @@ import pandas as pd
 from torch_geometric.data import HeteroData
 
 
+class GraphData:
+    def __init__(self, region, records_directory="data/raw/Records"):
+        self.data = HeteroData()
+        self.region = region
+        self.records_directory = records_directory
+        self.train_df, self.bg_df = self.retrieve_region_data(region)
+        
+    def retrieve_region_data(self, region):
+        train_path = f"{self.records_directory}/train_po/{region}train_po.csv"
+        bg_path = f"{self.records_directory}/train_bg/{region}train_bg.csv"
+        train_df = pd.read_csv(train_path)
+        bg_df = pd.read_csv(bg_path)
+        return train_df, bg_df
+
+    def get_species_nodes():
+        pass  # Implementation would go here
+
+    def get_location_nodes():
+        pass  # Implementation would go here
+
+    def get_edges():
+        pass  # Implementation would go here
+        
+
+
+
 def get_node_species_features(df, embedding_dim=16):
     # one hot encode the taxonomic group feature
     group_one_hot = pd.get_dummies(df["group"], prefix="group")
