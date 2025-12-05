@@ -22,17 +22,16 @@ class GraphData:
 
         # lets define the kwargs
         self.bg_data_method = kwargs.get("background_data_method", "from_csv")
-        self.n_samples = kwargs.get("n_background_samples", 50000)
-        self.stratified_proportion = kwargs.get("stratified_proportion", 0.7)
+        self.stratified_proportion = kwargs.get("stratified_proportion", 1.0)
         self.n_strata = kwargs.get("n_strata", 100)
         self.n_per_stratum = int((10000 * self.stratified_proportion) / self.n_strata)
 
-        self.train_df, self.bg_df = self.retrieve_region_data(region)
-
+        self.train_df = self.retrieve_po_data(region)
         self.train_df["location_id"] = self.train_df.groupby(
             self.location_features
         ).ngroup()
 
+        self.bg_df = self.retrieve_background_data(method=self.bg_data_method)
         self.bg_df["location_id"] = (
             self.bg_df.groupby(self.location_features).ngroup()
             + self.train_df["location_id"].nunique()
@@ -69,16 +68,19 @@ class GraphData:
             ]
         return spacial_features, environmental_features
 
-    def retrieve_region_data(self, region):
+    def retrieve_po_data(self, region):
         train_path = f"{self.records_directory}/train_po/{region}train_po.csv"
-        bg_path = f"{self.records_directory}/train_bg/{region}train_bg.csv"
         train_df = pd.read_csv(train_path)
-        bg_df = pd.read_csv(bg_path)
-        return train_df, bg_df
+        return train_df
 
     def retrieve_background_data(self, method="from_csv"):
         if method == "from_csv":
             bg_path = f"{self.records_directory}/train_bg/{self.region}train_bg.csv"
+            bg_df = pd.read_csv(bg_path)
+            return bg_df[self.spacial_features + self.environmental_features]
+
+        elif method == "preload_stratified_sampling":
+            bg_path = f"data/interim/bg_stratified_sampled.csv"
             bg_df = pd.read_csv(bg_path)
             return bg_df[self.spacial_features + self.environmental_features]
 
@@ -96,15 +98,8 @@ class GraphData:
             width = base_src.width
             n_pixels = height * width
             # get nsamples from any pixel
-            if n_pixels >= self.n_samples:
-                samples_idx = np.random.choice(
-                    n_pixels, size=int(self.n_samples), replace=False
-                )
-            else:
-                samples_idx = np.random.choice(
-                    n_pixels, size=int(self.n_samples), replace=True
-                )
-
+            n_samples = min(100000, n_pixels)
+            samples_idx = np.random.choice(n_pixels, size=int(n_samples), replace=False)
             rows = samples_idx // width
             cols = samples_idx % width
             # get the coordinates in x, y from rows and cols
@@ -147,6 +142,9 @@ class GraphData:
                 )
             sampled_bg_dfs.append(sampled_stratum_df)
         bg_df = pd.concat(sampled_bg_dfs, ignore_index=True)
+        # save the sampled background data for future use
+        save_path = f"data/interim/bg_stratified_sampled.csv"
+        bg_df.to_csv(save_path, index=False)
         return bg_df[self.spacial_features + self.environmental_features]
 
     def get_all_locations(self):
