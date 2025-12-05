@@ -1,23 +1,38 @@
+import os
 import torch
 import torch.nn as nn
 import pandas as pd
+import numpy as np
 from torch_geometric.data import HeteroData
+from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import radius_neighbors_graph
+from sklearn.cluster import KMeans
+import rasterio
 
 
 class GraphData:
-    def __init__(self, region, records_directory="data/raw/Records"):
+    def __init__(self, region, records_directory="data/raw/Records", *args, **kwargs):
         self.data = HeteroData()
         self.region = region
         self.records_directory = records_directory
-        self.train_df, self.bg_df = self.retrieve_region_data(region)
         self.spacial_features, self.environmental_features = (
             self.get_location_and_environmental_features()
         )
         self.location_features = self.spacial_features + self.environmental_features
+
+        # lets define the kwargs
+        self.bg_data_method = kwargs.get("background_data_method", "from_csv")
+        self.n_samples = kwargs.get("n_background_samples", 50000)
+        self.stratified_proportion = kwargs.get("stratified_proportion", 0.7)
+        self.n_strata = kwargs.get("n_strata", 100)
+        self.n_per_stratum = int((10000 * self.stratified_proportion) / self.n_strata)
+
+        self.train_df, self.bg_df = self.retrieve_region_data(region)
+
         self.train_df["location_id"] = self.train_df.groupby(
             self.location_features
         ).ngroup()
+
         self.bg_df["location_id"] = (
             self.bg_df.groupby(self.location_features).ngroup()
             + self.train_df["location_id"].nunique()
@@ -33,13 +48,6 @@ class GraphData:
         }
         self.num_locations = len(self.all_locations_df)
         self.num_species = len(self.species_to_index)
-
-    def retrieve_region_data(self, region):
-        train_path = f"{self.records_directory}/train_po/{region}train_po.csv"
-        bg_path = f"{self.records_directory}/train_bg/{region}train_bg.csv"
-        train_df = pd.read_csv(train_path)
-        bg_df = pd.read_csv(bg_path)
-        return train_df, bg_df
 
     def get_location_and_environmental_features(self):
         if self.region == "AWT":
@@ -60,6 +68,86 @@ class GraphData:
                 "tri",
             ]
         return spacial_features, environmental_features
+
+    def retrieve_region_data(self, region):
+        train_path = f"{self.records_directory}/train_po/{region}train_po.csv"
+        bg_path = f"{self.records_directory}/train_bg/{region}train_bg.csv"
+        train_df = pd.read_csv(train_path)
+        bg_df = pd.read_csv(bg_path)
+        return train_df, bg_df
+
+    def retrieve_background_data(self, method="from_csv"):
+        if method == "from_csv":
+            bg_path = f"{self.records_directory}/train_bg/{self.region}train_bg.csv"
+            bg_df = pd.read_csv(bg_path)
+            return bg_df[self.spacial_features + self.environmental_features]
+
+        elif method == "stratified_sampling":
+            bg_df = self.background_stratified_sampling()
+            return bg_df[self.spacial_features + self.environmental_features]
+
+    def background_stratified_sampling(self):
+        src_dir = f"data/raw/Environment/{self.region}"
+        first_env_feature = self.environmental_features[0]
+        src_file_path = os.path.join(src_dir, f"{first_env_feature}.tif")
+        # lets use this base raster file to get coordinates
+        with rasterio.open(src_file_path) as base_src:
+            height = base_src.height
+            width = base_src.width
+            n_pixels = height * width
+            # get nsamples from any pixel
+            if n_pixels >= self.n_samples:
+                samples_idx = np.random.choice(
+                    n_pixels, size=int(self.n_samples), replace=False
+                )
+            else:
+                samples_idx = np.random.choice(
+                    n_pixels, size=int(self.n_samples), replace=True
+                )
+
+            rows = samples_idx // width
+            cols = samples_idx % width
+            # get the coordinates in x, y from rows and cols
+            xs, ys = rasterio.transform.xy(base_src.transform, rows, cols)
+
+        # for the rest of environmental features, lets sample their values at the same locations
+        sample_coordinates = list(zip(xs, ys))
+        env_data = {}
+        for feature in self.environmental_features:
+            src_file_path = os.path.join(src_dir, f"{feature}.tif")
+            with rasterio.open(src_file_path) as src:
+                values = [x[0] for x in src.sample(sample_coordinates)]
+                env_data[feature] = values
+
+        bg_df = pd.DataFrame(env_data)
+        bg_df["x"] = xs
+        bg_df["y"] = ys
+
+        # stratify by clustering the environmental features
+
+        scaler = StandardScaler()
+        env_features_scaled = scaler.fit_transform(
+            bg_df[self.environmental_features].values
+        )
+        kmeans = KMeans(n_clusters=self.n_strata, random_state=42)
+        strata_labels = kmeans.fit_predict(env_features_scaled)
+        bg_df["strata"] = strata_labels
+
+        # now sample from each strata n_per_stratum samples
+        sampled_bg_dfs = []
+        for stratum in range(self.n_strata):
+            stratum_df = bg_df[bg_df["strata"] == stratum]
+            if len(stratum_df) >= self.n_per_stratum:
+                sampled_stratum_df = stratum_df.sample(
+                    n=self.n_per_stratum, replace=False, random_state=42
+                )
+            else:
+                sampled_stratum_df = stratum_df.sample(
+                    n=self.n_per_stratum, replace=True, random_state=42
+                )
+            sampled_bg_dfs.append(sampled_stratum_df)
+        bg_df = pd.concat(sampled_bg_dfs, ignore_index=True)
+        return bg_df[self.spacial_features + self.environmental_features]
 
     def get_all_locations(self):
         po_locations = self.train_df[
