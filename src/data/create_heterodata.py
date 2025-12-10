@@ -73,19 +73,29 @@ class GraphData:
         train_df = pd.read_csv(train_path)
         return train_df
 
-    def retrieve_background_data(self, method="from_csv"):
+    def retrieve_background_data(self, method="from_csv", save_clusters=False):
         if method == "from_csv":
             bg_path = f"{self.records_directory}/train_bg/{self.region}train_bg.csv"
             bg_df = pd.read_csv(bg_path)
             return bg_df[self.spacial_features + self.environmental_features]
 
         elif method == "preload_stratified_sampling":
-            bg_path = f"data/interim/bg_stratified_sampled.csv"
+            bg_path = f"data/processed/{self.region}_bg_cleaned.csv"
             bg_df = pd.read_csv(bg_path)
             return bg_df[self.spacial_features + self.environmental_features]
 
         elif method == "stratified_sampling":
             bg_df = self.background_stratified_sampling()
+            if save_clusters:
+                # save the sampled background data for future use
+                save_path = f"data/interim/bg_stratified_sampled.csv"
+                bg_df.to_csv(save_path, index=False)
+            bg_df = self.clean_background_data(bg_df)
+
+            save_path = f"data/processed/{self.region}_bg_cleaned.csv"
+            if not os.path.exists("data/processed/"):
+                os.makedirs("data/processed/")
+            bg_df.to_csv(save_path, index=False)
             return bg_df[self.spacial_features + self.environmental_features]
 
     def background_stratified_sampling(self):
@@ -142,10 +152,11 @@ class GraphData:
                 )
             sampled_bg_dfs.append(sampled_stratum_df)
         bg_df = pd.concat(sampled_bg_dfs, ignore_index=True)
-        # save the sampled background data for future use
-        save_path = f"data/interim/bg_stratified_sampled.csv"
-        bg_df.to_csv(save_path, index=False)
-        return bg_df[self.spacial_features + self.environmental_features]
+        return bg_df
+
+    def clean_background_data(self, bg_df, min_threshold=-1e5):
+        bg_df_cleaned = bg_df[(bg_df >= min_threshold).all(axis=1)]
+        return bg_df_cleaned
 
     def get_all_locations(self):
         po_locations = self.train_df[
@@ -199,5 +210,5 @@ class GraphData:
             )
             row_indices, col_indices = spatial_graph.nonzero()
             self.data["location", "nearby", "location"].edge_index = torch.tensor(
-                [row_indices, col_indices], dtype=torch.long
+                np.array([row_indices, col_indices]), dtype=torch.long
             )
