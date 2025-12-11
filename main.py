@@ -22,7 +22,6 @@ if __name__ == "__main__":
     graph_data = create_heterodata.GraphData(
         region="AWT",
         background_data_method="preload_stratified_sampling",
-        n_background_samples=50000,
         stratified_proportion=1.0,
         n_strata=100,
     )
