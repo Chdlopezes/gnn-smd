@@ -6,11 +6,23 @@ import torch.nn.functional as F
 
 class EcologicalHeteroGNN(nn.Module):
     def __init__(
-        self, species_input_dim, location_input_dim, hidden_dim, out_dim, heads
+        self,
+        num_species,
+        num_groups,
+        location_input_dim,
+        species_embedding_dim=16,
+        hidden_dim=32,
+        heads=4,
     ):
         super().__init__()
 
         # first thing to do is project the input nodes to same dimension
+        self.num_species = num_species
+        self.species_embedding_dim = species_embedding_dim
+
+        self.species_embedding = nn.Embedding(num_species, species_embedding_dim)
+        species_input_dim = species_embedding_dim + num_groups
+
         self.species_lin = nn.Linear(species_input_dim, hidden_dim)
         self.location_lin = nn.Linear(location_input_dim, hidden_dim)
 
@@ -49,21 +61,21 @@ class EcologicalHeteroGNN(nn.Module):
             {
                 ("location", "observes", "species"): GATConv(
                     hidden_dim,
-                    out_dim // heads,
+                    hidden_dim // heads,
                     heads=heads,
                     dropout=0.2,
                     add_self_loops=False,
                 ),
                 ("species", "observed_at", "location"): GATConv(
                     hidden_dim,
-                    out_dim // heads,
+                    hidden_dim // heads,
                     heads=heads,
                     dropout=0.2,
                     add_self_loops=False,
                 ),
                 ("location", "nearby", "location"): GATConv(
                     hidden_dim,
-                    out_dim // heads,
+                    hidden_dim // heads,
                     heads=heads,
                     dropout=0.2,
                     add_self_loops=True,
@@ -73,9 +85,15 @@ class EcologicalHeteroGNN(nn.Module):
         )
 
     def forward(self, data):
+        species_idx = data["species"].x[:, 0].long()
+        group_features = data["species"].x[:, 1:]
+
+        species_emb = self.species_embedding(species_idx)
+        species_features = torch.cat([species_emb, group_features], dim=1)
+
         # Initial projection to common dimension
         h = {
-            "species": self.species_lin(data["species"].x),
+            "species": self.species_lin(species_features),
             "location": self.location_lin(data["location"].x),
         }
 
@@ -92,4 +110,4 @@ class EcologicalHeteroGNN(nn.Module):
     def decode(self, h_species, h_location, edge_label_index):
         src, dst = edge_label_index
         edge_embeddings = h_species[src] * h_location[dst]
-        return torch.sum(edge_embeddings, dim=-1)
+        return torch.sum(edge_embeddings, dim=1)

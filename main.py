@@ -1,4 +1,5 @@
 from src.data import create_heterodata
+from src.models.heterognn import EcologicalHeteroGNN
 import torch
 
 
@@ -26,12 +27,26 @@ if __name__ == "__main__":
         n_strata=100,
     )
 
-    graph_data.get_species_nodes(embedding_dim=16)
-    graph_data.get_location_nodes(include_spacial_features=False)
+    graph_data.get_species_nodes()
+    graph_data.get_location_nodes(include_spacial_features=False, normalize=True)
     graph_data.get_edges(include_location_to_location_edges=True)
 
     hetero_data = graph_data.data
 
-    check_heterodata_nulls(hetero_data)
+    print(hetero_data["species"].x.shape)  # [40, 3] if 2 groups: [idx, group1, group2]
+    print(hetero_data["species"].x[:5])
 
-    print(hetero_data)
+    # Create model
+    model = EcologicalHeteroGNN(
+        num_species=graph_data.num_species,
+        num_groups=graph_data.num_groups,
+        location_input_dim=len(graph_data.environmental_features),
+        species_embedding_dim=16,
+        hidden_dim=32,
+        heads=4,
+    )
+
+    h_species, h_location = model(hetero_data)
+    print(h_species.shape)  # [40, 32]
+    print(h_location.shape)  # [10638, 32]
+    print(model.species_embedding.weight.shape)
